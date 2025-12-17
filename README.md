@@ -140,82 +140,41 @@ Many video files have multiple audio tracks (e.g., different languages, commenta
    cd Bulk-Passive-Listening
    ```
 
-2. Run as Python module:
+2. Run directly:
    ```bash
-   python -m video_to_audio
+   python video_to_audio_converter.py
    ```
 
 ### Building the Executable
 
-**Two versions available:**
-- **Single-file version** (recommended for easy building): `video_to_audio_converter.py`
-- **Multi-file version** (better for development): `video_to_audio/` package
-
-#### Option A: Build from Single File (Easiest)
-
-1. Download FFmpeg:
-   ```bash
-   # Download from https://www.gyan.dev/ffmpeg/builds/
-   # Extract ffmpeg.exe to ffmpeg/windows/ffmpeg.exe
-   ```
-
-2. Install PyInstaller:
+1. Install PyInstaller:
    ```bash
    pip install pyinstaller
    ```
 
-3. Build:
-   ```bash
-   pyinstaller video_to_audio_single.spec
-   ```
-
-See **BUILD_SINGLE_FILE.md** for detailed instructions.
-
-#### Option B: Build from Multi-File Package
-
-1. Install development dependencies:
-   ```bash
-   pip install -r requirements-dev.txt
-   ```
-
-2. Download FFmpeg for Windows:
-   ```bash
-   # Download from https://www.gyan.dev/ffmpeg/builds/
-   # Extract ffmpeg.exe to ffmpeg/windows/
-   ```
-
-3. Build with PyInstaller:
+2. Build:
    ```bash
    pyinstaller video_to_audio.spec
    ```
 
-See **BUILD_INSTRUCTIONS.md** for detailed instructions.
+3. Find your executable:
+   ```
+   dist/video-to-audio.exe (Windows)
+   dist/video-to-audio (macOS/Linux)
+   ```
 
-**Output:** `dist/video-to-audio.exe` (Windows) or `dist/video-to-audio` (macOS/Linux)
+See **BUILD_INSTRUCTIONS.md** for detailed instructions.
 
 ### Project Structure
 
-**Single-file version** (easiest for compiling):
 ```
-video_to_audio_converter.py  # All code in one file (~750 lines)
-video_to_audio_single.spec   # PyInstaller spec for single-file build
-BUILD_SINGLE_FILE.md         # Simple build instructions
-```
-
-**Multi-file version** (better for development):
-```
-video_to_audio/
-├── __init__.py          # Package initialization
-├── __main__.py          # Entry point
-├── cli.py               # Main CLI orchestration
-├── converter.py         # Conversion logic and pipeline
-├── ffmpeg_commands.py   # FFmpeg command construction
-├── file_utils.py        # File discovery and validation
-├── prompts.py           # User interaction
-└── config.py            # Configuration constants
+video_to_audio_converter.py      # Main program (all code in one file, ~750 lines)
+video_to_audio.spec              # PyInstaller build configuration
+BUILD_INSTRUCTIONS.md            # Build instructions
+BUILD_INSTRUCTIONS_FOR_YOUR_SETUP.md  # Quick build guide
 ```
 
-Both versions have identical functionality. Use whichever is more convenient.
+All functionality is in the single `video_to_audio_converter.py` file for easy compilation.
 
 ### Running Tests
 

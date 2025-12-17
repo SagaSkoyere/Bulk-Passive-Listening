@@ -1,11 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Video to Audio Converter.
+PyInstaller spec file for Video to Audio Converter (Single File Version).
 
-This creates a standalone executable with bundled ffmpeg binary.
+This creates a standalone executable from the single video_to_audio_converter.py file
+with bundled ffmpeg binary.
 
 To build:
-    pyinstaller video_to_audio.spec
+    pyinstaller video_to_audio_single.spec
 
 Output will be in dist/video-to-audio.exe (Windows) or dist/video-to-audio (macOS/Linux)
 """
@@ -36,10 +37,9 @@ elif sys.platform == 'linux':
         ffmpeg_binaries = [
             ('ffmpeg/linux/ffmpeg', 'ffmpeg/linux'),
         ]
-    # If no bundled ffmpeg for Linux, assume system ffmpeg is available
 
 a = Analysis(
-    ['video_to_audio/__main__.py'],
+    ['video_to_audio_converter.py'],
     pathex=[],
     binaries=ffmpeg_binaries,
     datas=[],
