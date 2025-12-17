@@ -351,9 +351,69 @@ def get_silero_model():
         raise Exception(f"Failed to load Silero VAD model: {e}") from e
 
 
+def log_speech_probabilities(
+    audio_path: str,
+    original_filename: str,
+    model,
+    log_dir: str,
+    window_size_samples: int = 512
+):
+    """
+    Log per-chunk speech probabilities to log.txt for troubleshooting.
+
+    Args:
+        audio_path: Path to 16kHz downsampled audio file
+        original_filename: Original video filename for logging
+        model: Silero VAD model instance
+        log_dir: Directory where log.txt should be created
+        window_size_samples: Window size for VAD analysis (default 512 for 16kHz)
+    """
+    try:
+        import torch
+
+        # Load audio
+        _, utils = get_silero_model()
+        read_audio = utils[2]
+        wav = read_audio(audio_path, sampling_rate=SILERO_SAMPLE_RATE)
+        audio_length_samples = len(wav)
+
+        # Process audio in chunks and collect probabilities
+        log_path = Path(log_dir) / "log.txt"
+
+        with open(log_path, 'a', encoding='utf-8') as f:
+            chunk_num = 0
+            for current_start_sample in range(0, audio_length_samples, window_size_samples):
+                # Extract chunk
+                chunk = wav[current_start_sample: current_start_sample + window_size_samples]
+
+                # Pad if necessary
+                if len(chunk) < window_size_samples:
+                    chunk = torch.nn.functional.pad(chunk, (0, int(window_size_samples - len(chunk))))
+
+                # Get speech probability
+                speech_prob = model(chunk, SILERO_SAMPLE_RATE).item()
+
+                # Calculate time range for this chunk
+                start_time = current_start_sample / SILERO_SAMPLE_RATE
+                end_time = (current_start_sample + window_size_samples) / SILERO_SAMPLE_RATE
+
+                # Write to log: filename|start-end|probability%
+                f.write(f"{original_filename}|{start_time:.3f}-{end_time:.3f}|{int(speech_prob * 100)}%\n")
+
+                chunk_num += 1
+
+        print(f"      Logged {chunk_num} probability chunks to log.txt")
+
+    except Exception as e:
+        # Don't fail the conversion if logging fails
+        print(f"      Warning: Failed to log probabilities: {e}")
+
+
 def detect_speech_segments_silero(
     audio_path: str,
-    ffmpeg_path: str
+    ffmpeg_path: str,
+    original_filename: str = None,
+    log_dir: str = None
 ) -> List[Tuple[float, float]]:
     """
     Use Silero VAD to detect speech segments in audio file.
@@ -361,6 +421,8 @@ def detect_speech_segments_silero(
     Args:
         audio_path: Path to audio file
         ffmpeg_path: Path to ffmpeg executable
+        original_filename: Original video filename for logging (optional)
+        log_dir: Directory to write log.txt (optional)
 
     Returns:
         List of (start_time, end_time) tuples in seconds
@@ -403,11 +465,15 @@ def detect_speech_segments_silero(
         if result.returncode != 0:
             raise Exception(f"Failed to downsample audio: {result.stderr}")
 
-        # Step 2: Load downsampled audio
+        # Step 2: Log per-chunk probabilities if requested
+        if original_filename and log_dir:
+            log_speech_probabilities(temp_16k_path, original_filename, model, log_dir)
+
+        # Step 3: Load downsampled audio
         print("      Analyzing speech with Silero VAD...")
         wav = read_audio(temp_16k_path, sampling_rate=SILERO_SAMPLE_RATE)
 
-        # Step 3: Detect speech timestamps
+        # Step 4: Detect speech timestamps
         speech_timestamps = get_speech_timestamps(
             wav,
             model,
@@ -418,7 +484,7 @@ def detect_speech_segments_silero(
             speech_pad_ms=SILERO_SPEECH_PAD_MS
         )
 
-        # Step 4: Convert sample indices to time in seconds
+        # Step 5: Convert sample indices to time in seconds
         segments = []
         for timestamp in speech_timestamps:
             start_sec = timestamp['start'] / SILERO_SAMPLE_RATE
@@ -445,7 +511,8 @@ def detect_speech_segments_silero(
 def apply_silero_vad(
     input_audio_path: str,
     output_path: str,
-    ffmpeg_path: str
+    ffmpeg_path: str,
+    original_filename: str = None
 ) -> Tuple[bool, str]:
     """
     Apply Silero VAD to detect and extract speech segments.
@@ -457,13 +524,22 @@ def apply_silero_vad(
         input_audio_path: Path to input audio file (original quality)
         output_path: Path for output file
         ffmpeg_path: Path to ffmpeg executable
+        original_filename: Original video filename for logging (optional)
 
     Returns:
         Tuple of (success: bool, error_message: str)
     """
     try:
+        # Determine log directory (same as input file)
+        log_dir = str(Path(input_audio_path).parent) if original_filename else None
+
         # Detect speech segments using Silero VAD
-        segments = detect_speech_segments_silero(input_audio_path, ffmpeg_path)
+        segments = detect_speech_segments_silero(
+            input_audio_path,
+            ffmpeg_path,
+            original_filename=original_filename,
+            log_dir=log_dir
+        )
 
         if not segments:
             return False, "No speech segments detected by Silero VAD"
@@ -627,8 +703,9 @@ def convert_video_to_audio(
 
             # Step 2: Remove silence (Silero VAD or FFmpeg)
             if use_silero_vad:
-                print("      Using EXPERIMENTAL Silero VAD for speech detection...")
-                success, error = apply_silero_vad(temp1, temp2, ffmpeg_path)
+                print("      Using experimental Silero VAD for speech detection...")
+                original_filename = Path(input_path).name
+                success, error = apply_silero_vad(temp1, temp2, ffmpeg_path, original_filename)
                 if not success:
                     print(f"      Silero VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
@@ -665,8 +742,9 @@ def convert_video_to_audio(
 
             # Step 2: Remove silence (Silero VAD or FFmpeg)
             if use_silero_vad:
-                print("      Using EXPERIMENTAL Silero VAD for speech detection...")
-                success, error = apply_silero_vad(temp1, output_path, ffmpeg_path)
+                print("      Using experimental Silero VAD for speech detection...")
+                original_filename = Path(input_path).name
+                success, error = apply_silero_vad(temp1, output_path, ffmpeg_path, original_filename)
                 if not success:
                     print(f"      Silero VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
@@ -785,7 +863,7 @@ def get_user_preferences() -> dict:
     # If user wants silence removal, ask about ML method
     use_silero_vad = False
     if remove_silence:
-        use_silero_vad = prompt_yes_no("  Use EXPERIMENTAL machine learning for speech detection?")
+        use_silero_vad = prompt_yes_no("  Use experimental machine learning for speech detection?")
 
     normalize_audio = prompt_yes_no("Normalize audio levels for listening?")
     audio_track = prompt_audio_track()

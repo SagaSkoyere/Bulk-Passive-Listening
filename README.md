@@ -43,7 +43,7 @@ Directory: C:\Users\YourName\Videos
 Configuration Options:
 --------------------------------------------------
 Remove stretches of silence? (y/n): y
-  Use EXPERIMENTAL machine learning for speech detection? (y/n): y
+  Use experimental machine learning for speech detection? (y/n): y
 Normalize audio levels for listening? (y/n): y
 Audio track to use (1/2/3): 1
 
@@ -102,7 +102,7 @@ Removes quiet sections from the audio. You'll have two options:
 - Fast and reliable
 - Good for general use
 
-**EXPERIMENTAL ML Method (Silero VAD):**
+**Experimental ML Method (Silero VAD):**
 - Uses machine learning for speech detection
 - Optimized for anime dialogue and natural speech
 - More accurate speech detection with 1-second buffer for natural timing
