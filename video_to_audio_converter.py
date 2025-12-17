@@ -47,8 +47,8 @@ TRUE_PEAK = '-1.5'
 
 # Silero VAD settings (for experimental ML-based speech detection)
 SILERO_SAMPLE_RATE = 16000  # Silero VAD expects 16kHz audio
-SILERO_THRESHOLD = 0.7
-SILERO_MIN_SPEECH_DURATION_MS = 400
+SILERO_THRESHOLD = 0.5
+SILERO_MIN_SPEECH_DURATION_MS = 250
 SILERO_MIN_SILENCE_DURATION_MS = 250
 SILERO_SPEECH_PAD_MS = 1000  # 1-second buffer for natural timing
 
@@ -390,8 +390,8 @@ def log_speech_probabilities(
                 if len(chunk) < window_size_samples:
                     chunk = torch.nn.functional.pad(chunk, (0, int(window_size_samples - len(chunk))))
 
-                # Get speech probability
-                speech_prob = model(chunk, SILERO_SAMPLE_RATE).item()
+                # Get speech probability (add batch dimension for correct input shape)
+                speech_prob = model(chunk.unsqueeze(0), SILERO_SAMPLE_RATE).item()
 
                 # Calculate time range for this chunk
                 start_time = current_start_sample / SILERO_SAMPLE_RATE
