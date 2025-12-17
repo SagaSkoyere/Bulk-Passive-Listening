@@ -52,8 +52,9 @@ SILERO_MIN_SPEECH_DURATION_MS = 400
 SILERO_MIN_SILENCE_DURATION_MS = 250
 SILERO_SPEECH_PAD_MS = 1000  # 1-second buffer for natural timing
 
-# Global cache for Silero VAD model
+# Global cache for Silero VAD model and utilities
 _silero_model = None
+_silero_utils = None
 
 
 # ============================================================================
@@ -312,33 +313,35 @@ def build_normalization_command(
 
 def get_silero_model():
     """
-    Load and cache Silero VAD model.
+    Load and cache Silero VAD model and utility functions.
 
     Returns:
-        Silero VAD model instance
+        Tuple of (model, utils) where utils is a tuple containing:
+        (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
 
     Raises:
         ImportError: If torch/torchaudio not installed
         Exception: If model loading fails
     """
-    global _silero_model
+    global _silero_model, _silero_utils
 
-    if _silero_model is not None:
-        return _silero_model
+    if _silero_model is not None and _silero_utils is not None:
+        return _silero_model, _silero_utils
 
     try:
         import torch
         torch.set_num_threads(1)  # Optimize for single-threaded use
 
         # Load Silero VAD model from torch hub
-        _silero_model, utils = torch.hub.load(
+        # Returns (model, utils_tuple)
+        _silero_model, _silero_utils = torch.hub.load(
             repo_or_dir='snakers4/silero-vad',
             model='silero_vad',
             force_reload=False,
             onnx=False
         )
 
-        return _silero_model
+        return _silero_model, _silero_utils
 
     except ImportError as e:
         raise ImportError(
@@ -371,13 +374,12 @@ def detect_speech_segments_silero(
         import torchaudio
 
         print("      Loading Silero VAD model...")
-        model = get_silero_model()
-        (get_speech_timestamps, _, read_audio, _, _) = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            onnx=False
-        )
+        model, utils = get_silero_model()
+
+        # Extract utility functions from the utils tuple
+        # utils contains: (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
+        get_speech_timestamps = utils[0]
+        read_audio = utils[2]
 
         # Step 1: Downsample audio to 16kHz mono for VAD analysis
         print("      Downsampling audio to 16kHz for VAD analysis...")
