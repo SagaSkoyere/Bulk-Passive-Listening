@@ -45,6 +45,16 @@ TARGET_LUFS = '-16'
 LOUDNESS_RANGE = '11'
 TRUE_PEAK = '-1.5'
 
+# Silero VAD settings (for experimental ML-based speech detection)
+SILERO_SAMPLE_RATE = 16000  # Silero VAD expects 16kHz audio
+SILERO_THRESHOLD = 0.7
+SILERO_MIN_SPEECH_DURATION_MS = 400
+SILERO_MIN_SILENCE_DURATION_MS = 250
+SILERO_SPEECH_PAD_MS = 1000  # 1-second buffer for natural timing
+
+# Global cache for Silero VAD model
+_silero_model = None
+
 
 # ============================================================================
 # FILE UTILITIES
@@ -297,6 +307,217 @@ def build_normalization_command(
 
 
 # ============================================================================
+# SILERO VAD (EXPERIMENTAL ML-BASED SPEECH DETECTION)
+# ============================================================================
+
+def get_silero_model():
+    """
+    Load and cache Silero VAD model.
+
+    Returns:
+        Silero VAD model instance
+
+    Raises:
+        ImportError: If torch/torchaudio not installed
+        Exception: If model loading fails
+    """
+    global _silero_model
+
+    if _silero_model is not None:
+        return _silero_model
+
+    try:
+        import torch
+        torch.set_num_threads(1)  # Optimize for single-threaded use
+
+        # Load Silero VAD model from torch hub
+        _silero_model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            onnx=False
+        )
+
+        return _silero_model
+
+    except ImportError as e:
+        raise ImportError(
+            "PyTorch libraries not found. Install with: pip install torch torchaudio"
+        ) from e
+    except Exception as e:
+        raise Exception(f"Failed to load Silero VAD model: {e}") from e
+
+
+def detect_speech_segments_silero(
+    audio_path: str,
+    ffmpeg_path: str
+) -> List[Tuple[float, float]]:
+    """
+    Use Silero VAD to detect speech segments in audio file.
+
+    Args:
+        audio_path: Path to audio file
+        ffmpeg_path: Path to ffmpeg executable
+
+    Returns:
+        List of (start_time, end_time) tuples in seconds
+
+    Raises:
+        ImportError: If required libraries not available
+        Exception: If processing fails
+    """
+    try:
+        import torch
+        import torchaudio
+
+        print("      Loading Silero VAD model...")
+        model = get_silero_model()
+        (get_speech_timestamps, _, read_audio, _, _) = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            force_reload=False,
+            onnx=False
+        )
+
+        # Step 1: Downsample audio to 16kHz mono for VAD analysis
+        print("      Downsampling audio to 16kHz for VAD analysis...")
+        temp_16k_path = audio_path.replace('.m4a', '_16k_temp.wav')
+
+        downsample_cmd = [
+            ffmpeg_path,
+            '-i', audio_path,
+            '-ar', str(SILERO_SAMPLE_RATE),
+            '-ac', '1',  # Mono
+            '-y',
+            temp_16k_path
+        ]
+
+        # Hide FFmpeg output
+        kwargs = {'capture_output': True, 'text': True}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(downsample_cmd, **kwargs)
+        if result.returncode != 0:
+            raise Exception(f"Failed to downsample audio: {result.stderr}")
+
+        # Step 2: Load downsampled audio
+        print("      Analyzing speech with Silero VAD...")
+        wav = read_audio(temp_16k_path, sampling_rate=SILERO_SAMPLE_RATE)
+
+        # Step 3: Detect speech timestamps
+        speech_timestamps = get_speech_timestamps(
+            wav,
+            model,
+            threshold=SILERO_THRESHOLD,
+            sampling_rate=SILERO_SAMPLE_RATE,
+            min_speech_duration_ms=SILERO_MIN_SPEECH_DURATION_MS,
+            min_silence_duration_ms=SILERO_MIN_SILENCE_DURATION_MS,
+            speech_pad_ms=SILERO_SPEECH_PAD_MS
+        )
+
+        # Step 4: Convert sample indices to time in seconds
+        segments = []
+        for timestamp in speech_timestamps:
+            start_sec = timestamp['start'] / SILERO_SAMPLE_RATE
+            end_sec = timestamp['end'] / SILERO_SAMPLE_RATE
+            segments.append((start_sec, end_sec))
+
+        # Cleanup temporary file
+        try:
+            Path(temp_16k_path).unlink()
+        except:
+            pass
+
+        print(f"      Detected {len(segments)} speech segment(s)")
+        return segments
+
+    except ImportError as e:
+        raise ImportError(
+            "Required libraries not found. Install with: pip install torch torchaudio"
+        ) from e
+    except Exception as e:
+        raise Exception(f"Silero VAD processing failed: {e}") from e
+
+
+def apply_silero_vad(
+    input_audio_path: str,
+    output_path: str,
+    ffmpeg_path: str
+) -> Tuple[bool, str]:
+    """
+    Apply Silero VAD to detect and extract speech segments.
+
+    Uses ML-based voice activity detection optimized for anime dialogue.
+    Processes audio at original quality using timestamps from 16kHz analysis.
+
+    Args:
+        input_audio_path: Path to input audio file (original quality)
+        output_path: Path for output file
+        ffmpeg_path: Path to ffmpeg executable
+
+    Returns:
+        Tuple of (success: bool, error_message: str)
+    """
+    try:
+        # Detect speech segments using Silero VAD
+        segments = detect_speech_segments_silero(input_audio_path, ffmpeg_path)
+
+        if not segments:
+            return False, "No speech segments detected by Silero VAD"
+
+        # Log detected segments
+        print("      Speech segments detected:")
+        for i, (start, end) in enumerate(segments, 1):
+            duration = end - start
+            print(f"        Segment {i}: {start:.2f}s - {end:.2f}s ({duration:.2f}s)")
+
+        # Extract and concatenate segments using FFmpeg
+        print("      Extracting and concatenating speech segments...")
+
+        # Create a filter_complex to concatenate segments
+        # Build individual segment filters
+        filter_parts = []
+        for i, (start, end) in enumerate(segments):
+            duration = end - start
+            filter_parts.append(f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{i}]")
+
+        # Concatenate all segments
+        concat_inputs = ''.join([f"[a{i}]" for i in range(len(segments))])
+        filter_complex = ';'.join(filter_parts) + f";{concat_inputs}concat=n={len(segments)}:v=0:a=1[out]"
+
+        # Build FFmpeg command
+        concat_cmd = [
+            ffmpeg_path,
+            '-i', input_audio_path,
+            '-filter_complex', filter_complex,
+            '-map', '[out]',
+            '-c:a', AUDIO_CODEC,
+            '-b:a', AUDIO_BITRATE,
+            '-y',
+            output_path
+        ]
+
+        # Execute FFmpeg
+        kwargs = {'capture_output': True, 'text': True}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(concat_cmd, **kwargs)
+
+        if result.returncode != 0:
+            return False, f"Failed to concatenate speech segments: {result.stderr}"
+
+        print(f"      Successfully extracted {len(segments)} speech segment(s)")
+        return True, ""
+
+    except ImportError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, str(e)
+
+
+# ============================================================================
 # CONVERSION LOGIC
 # ============================================================================
 
@@ -383,6 +604,7 @@ def convert_video_to_audio(
         output_path = get_output_path(input_path)
 
         remove_silence = preferences.get('remove_silence', False)
+        use_silero_vad = preferences.get('use_silero_vad', False)
         normalize_audio = preferences.get('normalize_audio', False)
         audio_track = preferences.get('audio_track', 1)
 
@@ -401,11 +623,22 @@ def convert_video_to_audio(
             if not success:
                 return False, f"Base conversion failed: {error}"
 
-            # Step 2: Remove silence
-            cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
-            success, error = run_ffmpeg_command(cmd)
-            if not success:
-                return False, f"Silence removal failed: {error}"
+            # Step 2: Remove silence (Silero VAD or FFmpeg)
+            if use_silero_vad:
+                print("      Using EXPERIMENTAL Silero VAD for speech detection...")
+                success, error = apply_silero_vad(temp1, temp2, ffmpeg_path)
+                if not success:
+                    print(f"      Silero VAD failed: {error}")
+                    print("      Falling back to FFmpeg silence removal...")
+                    cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
+                    success, error = run_ffmpeg_command(cmd)
+                    if not success:
+                        return False, f"Silence removal failed: {error}"
+            else:
+                cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
+                success, error = run_ffmpeg_command(cmd)
+                if not success:
+                    return False, f"Silence removal failed: {error}"
 
             # Step 3: Normalize
             cmd = build_normalization_command(ffmpeg_path, temp2, output_path)
@@ -428,11 +661,22 @@ def convert_video_to_audio(
             if not success:
                 return False, f"Base conversion failed: {error}"
 
-            # Step 2: Remove silence
-            cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
-            success, error = run_ffmpeg_command(cmd)
-            if not success:
-                return False, f"Silence removal failed: {error}"
+            # Step 2: Remove silence (Silero VAD or FFmpeg)
+            if use_silero_vad:
+                print("      Using EXPERIMENTAL Silero VAD for speech detection...")
+                success, error = apply_silero_vad(temp1, output_path, ffmpeg_path)
+                if not success:
+                    print(f"      Silero VAD failed: {error}")
+                    print("      Falling back to FFmpeg silence removal...")
+                    cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
+                    success, error = run_ffmpeg_command(cmd)
+                    if not success:
+                        return False, f"Silence removal failed: {error}"
+            else:
+                cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
+                success, error = run_ffmpeg_command(cmd)
+                if not success:
+                    return False, f"Silence removal failed: {error}"
 
             return True, ""
 
@@ -526,6 +770,7 @@ def get_user_preferences() -> dict:
     Returns:
         Dictionary with keys:
             - remove_silence: bool
+            - use_silero_vad: bool
             - normalize_audio: bool
             - audio_track: int
     """
@@ -534,6 +779,12 @@ def get_user_preferences() -> dict:
     print("-" * 50)
 
     remove_silence = prompt_yes_no("Remove stretches of silence?")
+
+    # If user wants silence removal, ask about ML method
+    use_silero_vad = False
+    if remove_silence:
+        use_silero_vad = prompt_yes_no("  Use EXPERIMENTAL machine learning for speech detection?")
+
     normalize_audio = prompt_yes_no("Normalize audio levels for listening?")
     audio_track = prompt_audio_track()
 
@@ -541,6 +792,7 @@ def get_user_preferences() -> dict:
 
     return {
         'remove_silence': remove_silence,
+        'use_silero_vad': use_silero_vad,
         'normalize_audio': normalize_audio,
         'audio_track': audio_track
     }
