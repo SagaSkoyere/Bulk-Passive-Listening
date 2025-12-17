@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyInstaller
+# Note: We keep video_to_audio.spec in git
+build/spec/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+test_videos/
+test_*.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# FFmpeg binaries (large files)
+ffmpeg/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
