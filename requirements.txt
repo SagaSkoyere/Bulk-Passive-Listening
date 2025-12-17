@@ -1,2 +1,0 @@
-# Video to Audio Converter
-# No runtime dependencies - uses Python standard library only
