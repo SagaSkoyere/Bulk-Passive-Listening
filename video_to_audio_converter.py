@@ -95,7 +95,7 @@ def get_output_path(input_path: str) -> str:
     Generate output audio file path from input video path.
 
     Output file will be in the same directory with the same name
-    but with .m4a extension.
+    plus "_audio" suffix, with .m4a extension.
 
     Args:
         input_path: Path to input video file
@@ -104,7 +104,7 @@ def get_output_path(input_path: str) -> str:
         Path to output audio file
     """
     input_file = Path(input_path)
-    output_file = input_file.with_suffix(OUTPUT_EXTENSION)
+    output_file = input_file.parent / f"{input_file.stem}_audio{OUTPUT_EXTENSION}"
     return str(output_file)
 
 
@@ -607,7 +607,7 @@ def process_files(
     for i, video_file in enumerate(video_files, 1):
         # Display progress
         print(f"\n[{i}/{total}] Converting: {video_file.name}")
-        output_name = video_file.stem + ".m4a"
+        output_name = video_file.stem + "_audio.m4a"
         print(f"      Output: {output_name}")
 
         try:
@@ -710,6 +710,19 @@ def main():
     # Display summary
     display_summary(video_files, errors)
 
+    # Keep window open until user closes it
+    print()
+    input("Press Enter to exit...")
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print()
+        print("=" * 60)
+        print("UNEXPECTED ERROR")
+        print("=" * 60)
+        print(f"An error occurred: {e}")
+        print()
+        input("Press Enter to exit...")

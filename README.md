@@ -55,11 +55,11 @@ Processing Files
 ============================================================
 
 [1/5] Converting: lecture.mp4
-      Output: lecture.m4a
+      Output: lecture_audio.m4a
       Status: ✓ Completed
 
 [2/5] Converting: tutorial.mov
-      Output: tutorial.m4a
+      Output: tutorial_audio.m4a
       Status: ✓ Completed
 
 ...
@@ -87,8 +87,8 @@ video-to-audio.exe "C:\Users\YourName\Videos"
 - **Format**: AAC audio in .m4a container
 - **Bitrate**: 160kbps (good quality for speech and music)
 - **Location**: Same folder as the original video files
-- **Naming**: Same name as video (e.g., `video.mp4` → `video.m4a`)
-- **Overwrite**: Existing .m4a files will be overwritten
+- **Naming**: Video name + "_audio" suffix (e.g., `video.mp4` → `video_audio.m4a`)
+- **Overwrite**: Existing audio files will be overwritten
 
 ## Processing Options Explained
 
