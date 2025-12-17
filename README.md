@@ -147,6 +147,32 @@ Many video files have multiple audio tracks (e.g., different languages, commenta
 
 ### Building the Executable
 
+**Two versions available:**
+- **Single-file version** (recommended for easy building): `video_to_audio_converter.py`
+- **Multi-file version** (better for development): `video_to_audio/` package
+
+#### Option A: Build from Single File (Easiest)
+
+1. Download FFmpeg:
+   ```bash
+   # Download from https://www.gyan.dev/ffmpeg/builds/
+   # Extract ffmpeg.exe to ffmpeg/windows/ffmpeg.exe
+   ```
+
+2. Install PyInstaller:
+   ```bash
+   pip install pyinstaller
+   ```
+
+3. Build:
+   ```bash
+   pyinstaller video_to_audio_single.spec
+   ```
+
+See **BUILD_SINGLE_FILE.md** for detailed instructions.
+
+#### Option B: Build from Multi-File Package
+
 1. Install development dependencies:
    ```bash
    pip install -r requirements-dev.txt
@@ -163,10 +189,20 @@ Many video files have multiple audio tracks (e.g., different languages, commenta
    pyinstaller video_to_audio.spec
    ```
 
-4. Find the executable in `dist/video-to-audio.exe` (Windows) or `dist/video-to-audio` (macOS/Linux)
+See **BUILD_INSTRUCTIONS.md** for detailed instructions.
+
+**Output:** `dist/video-to-audio.exe` (Windows) or `dist/video-to-audio` (macOS/Linux)
 
 ### Project Structure
 
+**Single-file version** (easiest for compiling):
+```
+video_to_audio_converter.py  # All code in one file (~750 lines)
+video_to_audio_single.spec   # PyInstaller spec for single-file build
+BUILD_SINGLE_FILE.md         # Simple build instructions
+```
+
+**Multi-file version** (better for development):
 ```
 video_to_audio/
 ├── __init__.py          # Package initialization
@@ -178,6 +214,8 @@ video_to_audio/
 ├── prompts.py           # User interaction
 └── config.py            # Configuration constants
 ```
+
+Both versions have identical functionality. Use whichever is more convenient.
 
 ### Running Tests
 
