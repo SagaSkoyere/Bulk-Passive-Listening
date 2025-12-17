@@ -43,6 +43,7 @@ Directory: C:\Users\YourName\Videos
 Configuration Options:
 --------------------------------------------------
 Remove stretches of silence? (y/n): y
+  Use EXPERIMENTAL machine learning for speech detection? (y/n): y
 Normalize audio levels for listening? (y/n): y
 Audio track to use (1/2/3): 1
 
@@ -94,8 +95,23 @@ video-to-audio.exe "C:\Users\YourName\Videos"
 
 ### 1. Remove Stretches of Silence
 
-Removes quiet sections from the audio where the volume is below -55dB for more than 1.2 seconds. This is useful for:
+Removes quiet sections from the audio. You'll have two options:
+
+**Traditional Method (FFmpeg):**
+- Removes audio below -55dB for more than 1.2 seconds
+- Fast and reliable
+- Good for general use
+
+**EXPERIMENTAL ML Method (Silero VAD):**
+- Uses machine learning for speech detection
+- Optimized for anime dialogue and natural speech
+- More accurate speech detection with 1-second buffer for natural timing
+- Displays detected speech segments with timestamps
+- Automatically falls back to traditional method if ML libraries unavailable
+
+Useful for:
 - Lectures with long pauses
+- Anime episodes with silence
 - Recordings with dead air
 - Reducing file size and playback time
 
@@ -123,7 +139,9 @@ Many video files have multiple audio tracks (e.g., different languages, commenta
 
 - **Windows**: Windows 10 or later (64-bit)
 - **macOS**: macOS 10.13 or later (if macOS version is available)
-- **Disk Space**: ~150MB for the executable + space for output files
+- **Disk Space**: ~600MB for the executable with ML features (~150MB without ML) + space for output files
+
+**Note**: The executable includes PyTorch and ML libraries for the experimental speech detection feature. All dependencies are bundled - no installation required!
 
 ## For Developers
 
