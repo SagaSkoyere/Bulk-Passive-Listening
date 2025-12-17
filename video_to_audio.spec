@@ -21,7 +21,7 @@ ffmpeg_binaries = []
 if sys.platform == 'win32':
     # Windows: Bundle ffmpeg.exe
     ffmpeg_binaries = [
-        ('ffmpeg/windows/ffmpeg.exe', 'ffmpeg/windows'),
+        (r"C:\Users\spoon\OneDrive\Desktop\SentencioAudioCondense\SentencioAudioCondense\ffmpeg.exe", "ffmpeg"),
     ]
 elif sys.platform == 'darwin':
     # macOS: Bundle ffmpeg binary

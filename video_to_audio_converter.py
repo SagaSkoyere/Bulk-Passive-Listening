@@ -156,15 +156,16 @@ def get_ffmpeg_path() -> str:
 
     # Determine platform-specific path
     if sys.platform == 'win32':
-        ffmpeg = base_path / 'ffmpeg' / 'windows' / 'ffmpeg.exe'
+        # When bundled by PyInstaller, ffmpeg.exe is in ffmpeg/ folder
+        ffmpeg = base_path / 'ffmpeg' / 'ffmpeg.exe'
     elif sys.platform == 'darwin':
-        ffmpeg = base_path / 'ffmpeg' / 'macos' / 'ffmpeg'
+        ffmpeg = base_path / 'ffmpeg' / 'ffmpeg'
     elif sys.platform == 'linux':
         # For Linux, try to use system ffmpeg
         ffmpeg = Path('ffmpeg')
         if not os.path.exists('/usr/bin/ffmpeg') and not os.path.exists('/usr/local/bin/ffmpeg'):
             # If system ffmpeg not found, try bundled version
-            ffmpeg = base_path / 'ffmpeg' / 'linux' / 'ffmpeg'
+            ffmpeg = base_path / 'ffmpeg' / 'ffmpeg'
     else:
         raise OSError(f'Unsupported platform: {sys.platform}')
 
