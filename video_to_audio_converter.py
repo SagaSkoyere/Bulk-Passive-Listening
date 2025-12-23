@@ -45,16 +45,16 @@ TARGET_LUFS = '-16'
 LOUDNESS_RANGE = '11'
 TRUE_PEAK = '-1.5'
 
-# Silero VAD settings (for experimental ML-based speech detection)
-SILERO_SAMPLE_RATE = 16000  # Silero VAD expects 16kHz audio
-SILERO_THRESHOLD = 0.5
-SILERO_MIN_SPEECH_DURATION_MS = 250
-SILERO_MIN_SILENCE_DURATION_MS = 250
-SILERO_SPEECH_PAD_MS = 1000  # 1-second buffer for natural timing
+# TEN VAD settings (for ML-based speech detection)
+TEN_VAD_SAMPLE_RATE = 16000  # TEN VAD expects 16kHz audio
+TEN_VAD_HOP_SIZE = 256  # 16ms frames at 16kHz (256 samples)
+TEN_VAD_THRESHOLD = 0.5
+TEN_VAD_MIN_SPEECH_DURATION_MS = 250
+TEN_VAD_MIN_SILENCE_DURATION_MS = 250
+TEN_VAD_SPEECH_PAD_MS = 1000  # 1-second buffer for natural timing
 
-# Global cache for Silero VAD model and utilities
-_silero_model = None
-_silero_utils = None
+# Global cache for TEN VAD instance
+_ten_vad_instance = None
 
 
 # ============================================================================
@@ -308,115 +308,159 @@ def build_normalization_command(
 
 
 # ============================================================================
-# SILERO VAD (EXPERIMENTAL ML-BASED SPEECH DETECTION)
+# TEN VAD (ML-BASED SPEECH DETECTION)
 # ============================================================================
 
-def get_silero_model():
+def get_ten_vad():
     """
-    Load and cache Silero VAD model and utility functions.
+    Load and cache TEN VAD instance.
 
     Returns:
-        Tuple of (model, utils) where utils is a tuple containing:
-        (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
+        TenVad instance configured with project settings
 
     Raises:
-        ImportError: If torch/torchaudio not installed
-        Exception: If model loading fails
+        ImportError: If ten_vad not installed
+        Exception: If initialization fails
     """
-    global _silero_model, _silero_utils
+    global _ten_vad_instance
 
-    if _silero_model is not None and _silero_utils is not None:
-        return _silero_model, _silero_utils
+    if _ten_vad_instance is not None:
+        return _ten_vad_instance
 
     try:
-        import torch
-        torch.set_num_threads(1)  # Optimize for single-threaded use
+        from ten_vad import TenVad
 
-        # Load Silero VAD model from torch hub
-        # Returns (model, utils_tuple)
-        _silero_model, _silero_utils = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            onnx=False
+        _ten_vad_instance = TenVad(
+            hop_size=TEN_VAD_HOP_SIZE,
+            threshold=TEN_VAD_THRESHOLD
         )
 
-        return _silero_model, _silero_utils
+        return _ten_vad_instance
 
     except ImportError as e:
         raise ImportError(
-            "PyTorch libraries not found. Install with: pip install torch torchaudio"
+            "TEN VAD library not found. Install with: pip install ten-vad"
         ) from e
     except Exception as e:
-        raise Exception(f"Failed to load Silero VAD model: {e}") from e
+        raise Exception(f"Failed to initialize TEN VAD: {e}") from e
 
 
-def log_speech_probabilities(
-    audio_path: str,
-    original_filename: str,
-    model,
-    log_dir: str,
-    window_size_samples: int = 512
-):
+def merge_frames_to_segments(
+    frame_results: List[Tuple[float, float, bool]]
+) -> List[Tuple[float, float]]:
     """
-    Log per-chunk speech probabilities to log.txt for troubleshooting.
+    Merge per-frame VAD results into continuous speech segments.
+
+    Applies filtering and merging logic for min_speech_duration_ms,
+    min_silence_duration_ms, and speech_pad_ms parameters.
 
     Args:
-        audio_path: Path to 16kHz downsampled audio file
+        frame_results: List of (timestamp, probability, is_voice) tuples
+
+    Returns:
+        List of (start_time, end_time) tuples in seconds
+    """
+    if not frame_results:
+        return []
+
+    # Step 1: Extract continuous voice regions
+    segments = []
+    current_segment_start = None
+
+    for timestamp, prob, is_voice in frame_results:
+        if is_voice and current_segment_start is None:
+            current_segment_start = timestamp
+        elif not is_voice and current_segment_start is not None:
+            segments.append((current_segment_start, timestamp))
+            current_segment_start = None
+
+    # Handle segment extending to end of audio
+    if current_segment_start is not None:
+        segments.append((current_segment_start, frame_results[-1][0]))
+
+    # Step 2: Filter segments shorter than MIN_SPEECH_DURATION_MS
+    min_duration_sec = TEN_VAD_MIN_SPEECH_DURATION_MS / 1000.0
+    segments = [
+        (start, end) for start, end in segments
+        if (end - start) >= min_duration_sec
+    ]
+
+    # Step 3: Merge segments separated by less than MIN_SILENCE_DURATION_MS
+    max_silence_sec = TEN_VAD_MIN_SILENCE_DURATION_MS / 1000.0
+    merged = []
+
+    for start, end in segments:
+        if merged and (start - merged[-1][1]) <= max_silence_sec:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+
+    segments = merged
+
+    # Step 4: Add speech padding
+    pad_sec = TEN_VAD_SPEECH_PAD_MS / 1000.0
+    total_duration = frame_results[-1][0] if frame_results else 0
+
+    segments = [
+        (max(0, start - pad_sec), min(end + pad_sec, total_duration))
+        for start, end in segments
+    ]
+
+    # Step 5: Merge any overlapping segments (from padding)
+    merged = []
+    for start, end in segments:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
+def log_speech_probabilities_ten_vad(
+    frame_results: List[Tuple[float, float, bool]],
+    original_filename: str,
+    log_dir: str
+):
+    """
+    Log per-frame speech probabilities to log.txt for troubleshooting.
+
+    Args:
+        frame_results: List of (timestamp, probability, is_voice) from TEN VAD
         original_filename: Original video filename for logging
-        model: Silero VAD model instance
         log_dir: Directory where log.txt should be created
-        window_size_samples: Window size for VAD analysis (default 512 for 16kHz)
     """
     try:
-        import torch
-
-        # Load audio
-        _, utils = get_silero_model()
-        read_audio = utils[2]
-        wav = read_audio(audio_path, sampling_rate=SILERO_SAMPLE_RATE)
-        audio_length_samples = len(wav)
-
-        # Process audio in chunks and collect probabilities
         log_path = Path(log_dir) / "log.txt"
+        frame_duration_sec = TEN_VAD_HOP_SIZE / TEN_VAD_SAMPLE_RATE
 
         with open(log_path, 'a', encoding='utf-8') as f:
-            chunk_num = 0
-            for current_start_sample in range(0, audio_length_samples, window_size_samples):
-                # Extract chunk
-                chunk = wav[current_start_sample: current_start_sample + window_size_samples]
-
-                # Pad if necessary
-                if len(chunk) < window_size_samples:
-                    chunk = torch.nn.functional.pad(chunk, (0, int(window_size_samples - len(chunk))))
-
-                # Get speech probability (add batch dimension for correct input shape)
-                speech_prob = model(chunk.unsqueeze(0), SILERO_SAMPLE_RATE).item()
-
-                # Calculate time range for this chunk
-                start_time = current_start_sample / SILERO_SAMPLE_RATE
-                end_time = (current_start_sample + window_size_samples) / SILERO_SAMPLE_RATE
+            for timestamp, probability, is_voice in frame_results:
+                start_time = timestamp
+                end_time = timestamp + frame_duration_sec
 
                 # Write to log: filename|start-end|probability%
-                f.write(f"{original_filename}|{start_time:.3f}-{end_time:.3f}|{int(speech_prob * 100)}%\n")
+                f.write(
+                    f"{original_filename}|"
+                    f"{start_time:.3f}-{end_time:.3f}|"
+                    f"{int(probability * 100)}%\n"
+                )
 
-                chunk_num += 1
-
-        print(f"      Logged {chunk_num} probability chunks to log.txt")
+        print(f"      Logged {len(frame_results)} probability frames to log.txt")
 
     except Exception as e:
         # Don't fail the conversion if logging fails
         print(f"      Warning: Failed to log probabilities: {e}")
 
 
-def detect_speech_segments_silero(
+def detect_speech_segments_ten_vad(
     audio_path: str,
     ffmpeg_path: str,
     original_filename: str = None,
     log_dir: str = None
 ) -> List[Tuple[float, float]]:
     """
-    Use Silero VAD to detect speech segments in audio file.
+    Use TEN VAD to detect speech segments in audio file.
 
     Args:
         audio_path: Path to audio file
@@ -432,31 +476,25 @@ def detect_speech_segments_silero(
         Exception: If processing fails
     """
     try:
-        import torch
-        import torchaudio
+        import numpy as np
+        from scipy.io import wavfile
 
-        print("      Loading Silero VAD model...")
-        model, utils = get_silero_model()
+        print("      Loading TEN VAD...")
+        vad = get_ten_vad()
 
-        # Extract utility functions from the utils tuple
-        # utils contains: (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
-        get_speech_timestamps = utils[0]
-        read_audio = utils[2]
-
-        # Step 1: Downsample audio to 16kHz mono for VAD analysis
+        # Step 1: Downsample audio to 16kHz mono
         print("      Downsampling audio to 16kHz for VAD analysis...")
         temp_16k_path = audio_path.replace('.m4a', '_16k_temp.wav')
 
         downsample_cmd = [
             ffmpeg_path,
             '-i', audio_path,
-            '-ar', str(SILERO_SAMPLE_RATE),
+            '-ar', str(TEN_VAD_SAMPLE_RATE),
             '-ac', '1',  # Mono
             '-y',
             temp_16k_path
         ]
 
-        # Hide FFmpeg output
         kwargs = {'capture_output': True, 'text': True}
         if sys.platform == 'win32':
             kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -465,31 +503,43 @@ def detect_speech_segments_silero(
         if result.returncode != 0:
             raise Exception(f"Failed to downsample audio: {result.stderr}")
 
-        # Step 2: Log per-chunk probabilities if requested
+        # Step 2: Load audio as numpy array
+        print("      Analyzing speech with TEN VAD...")
+        sample_rate, wav = wavfile.read(temp_16k_path)
+
+        if sample_rate != TEN_VAD_SAMPLE_RATE:
+            raise Exception(f"Unexpected sample rate: {sample_rate}")
+        if wav.dtype != np.int16:
+            raise Exception(f"Unexpected audio format: {wav.dtype}")
+
+        # Step 3: Process frames with TEN VAD
+        frame_results = []
+        hop_size = TEN_VAD_HOP_SIZE
+
+        for i in range(0, len(wav), hop_size):
+            frame = wav[i:i + hop_size]
+
+            # Pad last frame if necessary
+            if len(frame) < hop_size:
+                frame = np.pad(frame, (0, hop_size - len(frame)), 'constant')
+
+            # Process frame
+            result = vad.process(frame)
+            timestamp = i / TEN_VAD_SAMPLE_RATE
+
+            # Store results (probability, is_voice)
+            frame_results.append((timestamp, result.probability, result.is_voice))
+
+        # Step 4: Optional probability logging
         if original_filename and log_dir:
-            log_speech_probabilities(temp_16k_path, original_filename, model, log_dir)
+            log_speech_probabilities_ten_vad(
+                frame_results,
+                original_filename,
+                log_dir
+            )
 
-        # Step 3: Load downsampled audio
-        print("      Analyzing speech with Silero VAD...")
-        wav = read_audio(temp_16k_path, sampling_rate=SILERO_SAMPLE_RATE)
-
-        # Step 4: Detect speech timestamps
-        speech_timestamps = get_speech_timestamps(
-            wav,
-            model,
-            threshold=SILERO_THRESHOLD,
-            sampling_rate=SILERO_SAMPLE_RATE,
-            min_speech_duration_ms=SILERO_MIN_SPEECH_DURATION_MS,
-            min_silence_duration_ms=SILERO_MIN_SILENCE_DURATION_MS,
-            speech_pad_ms=SILERO_SPEECH_PAD_MS
-        )
-
-        # Step 5: Convert sample indices to time in seconds
-        segments = []
-        for timestamp in speech_timestamps:
-            start_sec = timestamp['start'] / SILERO_SAMPLE_RATE
-            end_sec = timestamp['end'] / SILERO_SAMPLE_RATE
-            segments.append((start_sec, end_sec))
+        # Step 5: Merge frames into segments
+        segments = merge_frames_to_segments(frame_results)
 
         # Cleanup temporary file
         try:
@@ -502,20 +552,20 @@ def detect_speech_segments_silero(
 
     except ImportError as e:
         raise ImportError(
-            "Required libraries not found. Install with: pip install torch torchaudio"
+            "Required libraries not found. Install with: pip install ten-vad scipy"
         ) from e
     except Exception as e:
-        raise Exception(f"Silero VAD processing failed: {e}") from e
+        raise Exception(f"TEN VAD processing failed: {e}") from e
 
 
-def apply_silero_vad(
+def apply_ten_vad(
     input_audio_path: str,
     output_path: str,
     ffmpeg_path: str,
     original_filename: str = None
 ) -> Tuple[bool, str]:
     """
-    Apply Silero VAD to detect and extract speech segments.
+    Apply TEN VAD to detect and extract speech segments.
 
     Uses ML-based voice activity detection optimized for anime dialogue.
     Processes audio at original quality using timestamps from 16kHz analysis.
@@ -533,8 +583,8 @@ def apply_silero_vad(
         # Determine log directory (same as input file)
         log_dir = str(Path(input_audio_path).parent) if original_filename else None
 
-        # Detect speech segments using Silero VAD
-        segments = detect_speech_segments_silero(
+        # Detect speech segments using TEN VAD
+        segments = detect_speech_segments_ten_vad(
             input_audio_path,
             ffmpeg_path,
             original_filename=original_filename,
@@ -542,7 +592,7 @@ def apply_silero_vad(
         )
 
         if not segments:
-            return False, "No speech segments detected by Silero VAD"
+            return False, "No speech segments detected by TEN VAD"
 
         # Log detected segments
         print("      Speech segments detected:")
@@ -701,13 +751,13 @@ def convert_video_to_audio(
             if not success:
                 return False, f"Base conversion failed: {error}"
 
-            # Step 2: Remove silence (Silero VAD or FFmpeg)
+            # Step 2: Remove silence (TEN VAD or FFmpeg)
             if use_silero_vad:
-                print("      Using experimental Silero VAD for speech detection...")
+                print("      Using TEN VAD for speech detection...")
                 original_filename = Path(input_path).name
-                success, error = apply_silero_vad(temp1, temp2, ffmpeg_path, original_filename)
+                success, error = apply_ten_vad(temp1, temp2, ffmpeg_path, original_filename)
                 if not success:
-                    print(f"      Silero VAD failed: {error}")
+                    print(f"      TEN VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
                     cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
                     success, error = run_ffmpeg_command(cmd)
@@ -740,13 +790,13 @@ def convert_video_to_audio(
             if not success:
                 return False, f"Base conversion failed: {error}"
 
-            # Step 2: Remove silence (Silero VAD or FFmpeg)
+            # Step 2: Remove silence (TEN VAD or FFmpeg)
             if use_silero_vad:
-                print("      Using experimental Silero VAD for speech detection...")
+                print("      Using TEN VAD for speech detection...")
                 original_filename = Path(input_path).name
-                success, error = apply_silero_vad(temp1, output_path, ffmpeg_path, original_filename)
+                success, error = apply_ten_vad(temp1, output_path, ffmpeg_path, original_filename)
                 if not success:
-                    print(f"      Silero VAD failed: {error}")
+                    print(f"      TEN VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
                     cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
                     success, error = run_ffmpeg_command(cmd)
@@ -863,7 +913,7 @@ def get_user_preferences() -> dict:
     # If user wants silence removal, ask about ML method
     use_silero_vad = False
     if remove_silence:
-        use_silero_vad = prompt_yes_no("  Use experimental machine learning for speech detection?")
+        use_silero_vad = prompt_yes_no("  Use TEN VAD for speech detection?")
 
     normalize_audio = prompt_yes_no("Normalize audio levels for listening?")
     audio_track = prompt_audio_track()
