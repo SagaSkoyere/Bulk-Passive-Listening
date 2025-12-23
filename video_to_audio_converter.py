@@ -438,6 +438,9 @@ def detect_speech_segments_silero(
         print("      Loading Silero VAD model...")
         model, utils = get_silero_model()
 
+        # Reset model state to ensure clean inference (no bleed from previous files)
+        model.reset_states()
+
         # Extract utility functions from the utils tuple
         # utils contains: (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks)
         get_speech_timestamps = utils[0]
@@ -452,6 +455,8 @@ def detect_speech_segments_silero(
             '-i', audio_path,
             '-ar', str(SILERO_SAMPLE_RATE),
             '-ac', '1',  # Mono
+            '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',  # EBU R128 normalization for quiet audio
+            '-acodec', 'pcm_s16le',  # Explicit PCM codec
             '-y',
             temp_16k_path
         ]
@@ -496,6 +501,9 @@ def detect_speech_segments_silero(
             Path(temp_16k_path).unlink()
         except:
             pass
+
+        # Reset model state after processing (best practice)
+        model.reset_states()
 
         print(f"      Detected {len(segments)} speech segment(s)")
         return segments
