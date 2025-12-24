@@ -307,6 +307,56 @@ def build_normalization_command(
     return command
 
 
+def get_audio_duration(file_path: str, ffmpeg_path: str) -> float:
+    """
+    Get duration of audio/video file in seconds using ffprobe.
+
+    Args:
+        file_path: Path to media file
+        ffmpeg_path: Path to ffmpeg executable
+
+    Returns:
+        Duration in seconds, or 0.0 if unable to determine
+    """
+    try:
+        # Get directory containing ffmpeg to find ffprobe
+        ffmpeg_dir = Path(ffmpeg_path).parent
+        ffprobe_path = ffmpeg_dir / ('ffprobe.exe' if sys.platform == 'win32' else 'ffprobe')
+
+        if not ffprobe_path.exists():
+            ffprobe_path = 'ffprobe'  # Try system PATH
+
+        cmd = [
+            str(ffprobe_path),
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+
+        kwargs = {'capture_output': True, 'text': True}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(cmd, **kwargs)
+
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+        return 0.0
+
+    except:
+        return 0.0
+
+
+def format_duration(seconds: float) -> str:
+    """Format seconds as human-readable duration (Xm Ys)."""
+    if seconds <= 0:
+        return "0m 0.0s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes}m {secs:.1f}s"
+
+
 # ============================================================================
 # TEN VAD (ML-BASED SPEECH DETECTION)
 # ============================================================================
@@ -376,7 +426,9 @@ def merge_frames_to_segments(
 
     # Handle segment extending to end of audio
     if current_segment_start is not None:
-        segments.append((current_segment_start, frame_results[-1][0]))
+        # Include last frame duration for accurate segment end
+        frame_duration = TEN_VAD_HOP_SIZE / TEN_VAD_SAMPLE_RATE
+        segments.append((current_segment_start, frame_results[-1][0] + frame_duration))
 
     # Step 2: Filter segments shorter than MIN_SPEECH_DURATION_MS
     min_duration_sec = TEN_VAD_MIN_SPEECH_DURATION_MS / 1000.0
@@ -399,7 +451,9 @@ def merge_frames_to_segments(
 
     # Step 4: Add speech padding
     pad_sec = TEN_VAD_SPEECH_PAD_MS / 1000.0
-    total_duration = frame_results[-1][0] if frame_results else 0
+    # Include the duration of the last frame for accurate total duration
+    frame_duration = TEN_VAD_HOP_SIZE / TEN_VAD_SAMPLE_RATE
+    total_duration = (frame_results[-1][0] + frame_duration) if frame_results else 0
 
     segments = [
         (max(0, start - pad_sec), min(end + pad_sec, total_duration))
@@ -562,7 +616,8 @@ def apply_ten_vad(
     input_audio_path: str,
     output_path: str,
     ffmpeg_path: str,
-    original_filename: str = None
+    original_filename: str = None,
+    enable_logging: bool = False
 ) -> Tuple[bool, str]:
     """
     Apply TEN VAD to detect and extract speech segments.
@@ -575,13 +630,14 @@ def apply_ten_vad(
         output_path: Path for output file
         ffmpeg_path: Path to ffmpeg executable
         original_filename: Original video filename for logging (optional)
+        enable_logging: Whether to create log.txt file (optional)
 
     Returns:
         Tuple of (success: bool, error_message: str)
     """
     try:
         # Determine log directory (same as input file)
-        log_dir = str(Path(input_audio_path).parent) if original_filename else None
+        log_dir = str(Path(input_audio_path).parent) if (original_filename and enable_logging) else None
 
         # Detect speech segments using TEN VAD
         segments = detect_speech_segments_ten_vad(
@@ -637,6 +693,18 @@ def apply_ten_vad(
             return False, f"Failed to concatenate speech segments: {result.stderr}"
 
         print(f"      Successfully extracted {len(segments)} speech segment(s)")
+
+        # Validate output duration
+        try:
+            output_duration = get_audio_duration(output_path, ffmpeg_path)
+            expected_duration = sum(end - start for start, end in segments)
+
+            if output_duration > 0 and abs(output_duration - expected_duration) > 0.5:
+                print(f"      Warning: Duration mismatch detected")
+                print(f"               Expected {expected_duration:.1f}s, got {output_duration:.1f}s")
+        except:
+            pass  # Don't fail conversion if validation fails
+
         return True, ""
 
     except ImportError as e:
@@ -706,7 +774,7 @@ def cleanup_temp_files(file_paths: list):
 def convert_video_to_audio(
     input_path: str,
     preferences: dict
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, dict]:
     """
     Convert video file to audio with optional processing.
 
@@ -721,9 +789,11 @@ def convert_video_to_audio(
             - remove_silence: bool
             - normalize_audio: bool
             - audio_track: int (1-based)
+            - enable_logging: bool
 
     Returns:
-        Tuple of (success: bool, error_message: str)
+        Tuple of (success: bool, error_message: str, stats: dict)
+        stats contains: {'initial_duration': float, 'final_duration': float}
     """
     temp_files = []
 
@@ -731,10 +801,14 @@ def convert_video_to_audio(
         ffmpeg_path = get_ffmpeg_path()
         output_path = get_output_path(input_path)
 
+        # Measure initial duration
+        initial_duration = get_audio_duration(input_path, ffmpeg_path)
+
         remove_silence = preferences.get('remove_silence', False)
         use_silero_vad = preferences.get('use_silero_vad', False)
         normalize_audio = preferences.get('normalize_audio', False)
         audio_track = preferences.get('audio_track', 1)
+        enable_logging = preferences.get('enable_logging', False)
 
         # Determine processing pipeline
         if remove_silence and normalize_audio:
@@ -749,33 +823,36 @@ def convert_video_to_audio(
             )
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Base conversion failed: {error}"
+                return False, f"Base conversion failed: {error}", {}
 
             # Step 2: Remove silence (TEN VAD or FFmpeg)
             if use_silero_vad:
                 print("      Using TEN VAD for speech detection...")
                 original_filename = Path(input_path).name
-                success, error = apply_ten_vad(temp1, temp2, ffmpeg_path, original_filename)
+                success, error = apply_ten_vad(temp1, temp2, ffmpeg_path, original_filename, enable_logging)
                 if not success:
                     print(f"      TEN VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
                     cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
                     success, error = run_ffmpeg_command(cmd)
                     if not success:
-                        return False, f"Silence removal failed: {error}"
+                        return False, f"Silence removal failed: {error}", {}
             else:
                 cmd = build_silence_removal_command(ffmpeg_path, temp1, temp2)
                 success, error = run_ffmpeg_command(cmd)
                 if not success:
-                    return False, f"Silence removal failed: {error}"
+                    return False, f"Silence removal failed: {error}", {}
 
             # Step 3: Normalize
             cmd = build_normalization_command(ffmpeg_path, temp2, output_path)
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Normalization failed: {error}"
+                return False, f"Normalization failed: {error}", {}
 
-            return True, ""
+            # Measure final duration and return stats
+            final_duration = get_audio_duration(output_path, ffmpeg_path)
+            stats = {'initial_duration': initial_duration, 'final_duration': final_duration}
+            return True, "", stats
 
         elif remove_silence:
             # Two steps: convert -> silence
@@ -788,27 +865,30 @@ def convert_video_to_audio(
             )
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Base conversion failed: {error}"
+                return False, f"Base conversion failed: {error}", {}
 
             # Step 2: Remove silence (TEN VAD or FFmpeg)
             if use_silero_vad:
                 print("      Using TEN VAD for speech detection...")
                 original_filename = Path(input_path).name
-                success, error = apply_ten_vad(temp1, output_path, ffmpeg_path, original_filename)
+                success, error = apply_ten_vad(temp1, output_path, ffmpeg_path, original_filename, enable_logging)
                 if not success:
                     print(f"      TEN VAD failed: {error}")
                     print("      Falling back to FFmpeg silence removal...")
                     cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
                     success, error = run_ffmpeg_command(cmd)
                     if not success:
-                        return False, f"Silence removal failed: {error}"
+                        return False, f"Silence removal failed: {error}", {}
             else:
                 cmd = build_silence_removal_command(ffmpeg_path, temp1, output_path)
                 success, error = run_ffmpeg_command(cmd)
                 if not success:
-                    return False, f"Silence removal failed: {error}"
+                    return False, f"Silence removal failed: {error}", {}
 
-            return True, ""
+            # Measure final duration and return stats
+            final_duration = get_audio_duration(output_path, ffmpeg_path)
+            stats = {'initial_duration': initial_duration, 'final_duration': final_duration}
+            return True, "", stats
 
         elif normalize_audio:
             # Two steps: convert -> normalize
@@ -821,15 +901,18 @@ def convert_video_to_audio(
             )
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Base conversion failed: {error}"
+                return False, f"Base conversion failed: {error}", {}
 
             # Step 2: Normalize
             cmd = build_normalization_command(ffmpeg_path, temp1, output_path)
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Normalization failed: {error}"
+                return False, f"Normalization failed: {error}", {}
 
-            return True, ""
+            # Measure final duration and return stats
+            final_duration = get_audio_duration(output_path, ffmpeg_path)
+            stats = {'initial_duration': initial_duration, 'final_duration': final_duration}
+            return True, "", stats
 
         else:
             # Single step: just convert
@@ -838,12 +921,15 @@ def convert_video_to_audio(
             )
             success, error = run_ffmpeg_command(cmd)
             if not success:
-                return False, f"Conversion failed: {error}"
+                return False, f"Conversion failed: {error}", {}
 
-            return True, ""
+            # Measure final duration and return stats
+            final_duration = get_audio_duration(output_path, ffmpeg_path)
+            stats = {'initial_duration': initial_duration, 'final_duration': final_duration}
+            return True, "", stats
 
     except Exception as e:
-        return False, str(e)
+        return False, str(e), {}
 
     finally:
         # Always cleanup temporary files
@@ -901,6 +987,7 @@ def get_user_preferences() -> dict:
         Dictionary with keys:
             - remove_silence: bool
             - use_silero_vad: bool
+            - enable_logging: bool
             - normalize_audio: bool
             - audio_track: int
     """
@@ -912,8 +999,11 @@ def get_user_preferences() -> dict:
 
     # If user wants silence removal, ask about ML method
     use_silero_vad = False
+    enable_logging = False
     if remove_silence:
         use_silero_vad = prompt_yes_no("  Use TEN VAD for speech detection?")
+        if use_silero_vad:
+            enable_logging = prompt_yes_no("  Create logging .txt file for troubleshooting?")
 
     normalize_audio = prompt_yes_no("Normalize audio levels for listening?")
     audio_track = prompt_audio_track()
@@ -923,6 +1013,7 @@ def get_user_preferences() -> dict:
     return {
         'remove_silence': remove_silence,
         'use_silero_vad': use_silero_vad,
+        'enable_logging': enable_logging,
         'normalize_audio': normalize_audio,
         'audio_track': audio_track
     }
@@ -993,13 +1084,25 @@ def process_files(
         print(f"      Output: {output_name}")
 
         try:
-            success, error_msg = convert_video_to_audio(
+            success, error_msg, stats = convert_video_to_audio(
                 str(video_file),
                 preferences
             )
 
             if success:
                 print(f"      Status: ✓ Completed")
+
+                # Display runtime statistics
+                if stats and stats.get('initial_duration', 0) > 0:
+                    initial = stats['initial_duration']
+                    final = stats.get('final_duration', 0)
+
+                    print(f"      Initial runtime:  {format_duration(initial)} ({initial:.1f}s)")
+                    print(f"      Trimmed runtime:  {format_duration(final)} ({final:.1f}s)")
+
+                    if initial > 0:
+                        pct_trimmed = ((initial - final) / initial) * 100
+                        print(f"      Percentage trimmed: {pct_trimmed:.1f}%")
             else:
                 print(f"      Status: ✗ FAILED")
                 errors.append((video_file.name, error_msg))
