@@ -523,12 +523,12 @@ def detect_speech_segments_ten_vad(
             if len(frame) < hop_size:
                 frame = np.pad(frame, (0, hop_size - len(frame)), 'constant')
 
-            # Process frame
-            result = vad.process(frame)
+            # Process frame - returns (probability, is_voice) tuple
+            probability, is_voice = vad.process(frame)
             timestamp = i / TEN_VAD_SAMPLE_RATE
 
             # Store results (probability, is_voice)
-            frame_results.append((timestamp, result.probability, result.is_voice))
+            frame_results.append((timestamp, probability, is_voice))
 
         # Step 4: Optional probability logging
         if original_filename and log_dir:
