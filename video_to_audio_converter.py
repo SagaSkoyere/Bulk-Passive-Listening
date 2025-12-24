@@ -309,7 +309,7 @@ def build_normalization_command(
 
 def get_audio_duration(file_path: str, ffmpeg_path: str) -> float:
     """
-    Get duration of audio/video file in seconds using ffprobe.
+    Get duration of audio/video file in seconds using ffmpeg.
 
     Args:
         file_path: Path to media file
@@ -319,19 +319,14 @@ def get_audio_duration(file_path: str, ffmpeg_path: str) -> float:
         Duration in seconds, or 0.0 if unable to determine
     """
     try:
-        # Get directory containing ffmpeg to find ffprobe
-        ffmpeg_dir = Path(ffmpeg_path).parent
-        ffprobe_path = ffmpeg_dir / ('ffprobe.exe' if sys.platform == 'win32' else 'ffprobe')
+        import re
 
-        if not ffprobe_path.exists():
-            ffprobe_path = 'ffprobe'  # Try system PATH
-
+        # Use ffmpeg to get duration (more reliable than ffprobe which may not be bundled)
         cmd = [
-            str(ffprobe_path),
-            '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            file_path
+            ffmpeg_path,
+            '-i', file_path,
+            '-f', 'null',
+            '-'
         ]
 
         kwargs = {'capture_output': True, 'text': True}
@@ -340,18 +335,24 @@ def get_audio_duration(file_path: str, ffmpeg_path: str) -> float:
 
         result = subprocess.run(cmd, **kwargs)
 
-        if result.returncode == 0 and result.stdout.strip():
-            return float(result.stdout.strip())
-        else:
-            # Debug: Show why it failed
-            if result.returncode != 0:
-                print(f"      Debug: ffprobe failed with return code {result.returncode}")
-                if result.stderr:
-                    print(f"      Debug: {result.stderr}")
+        # FFmpeg outputs duration in stderr
+        stderr = result.stderr
+
+        # Look for "Duration: HH:MM:SS.ms" in the output
+        duration_match = re.search(r'Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})', stderr)
+
+        if duration_match:
+            hours = int(duration_match.group(1))
+            minutes = int(duration_match.group(2))
+            seconds = float(duration_match.group(3))
+
+            total_seconds = hours * 3600 + minutes * 60 + seconds
+            return total_seconds
+
         return 0.0
 
     except Exception as e:
-        print(f"      Debug: Exception in get_audio_duration: {e}")
+        # Silently fail - duration stats are optional
         return 0.0
 
 
