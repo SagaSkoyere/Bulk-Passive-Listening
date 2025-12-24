@@ -342,9 +342,16 @@ def get_audio_duration(file_path: str, ffmpeg_path: str) -> float:
 
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
+        else:
+            # Debug: Show why it failed
+            if result.returncode != 0:
+                print(f"      Debug: ffprobe failed with return code {result.returncode}")
+                if result.stderr:
+                    print(f"      Debug: {result.stderr}")
         return 0.0
 
-    except:
+    except Exception as e:
+        print(f"      Debug: Exception in get_audio_duration: {e}")
         return 0.0
 
 
