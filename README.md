@@ -1,11 +1,11 @@
-# Video to Audio Converter
+# Bulk Audio Converter
 
-Batch-convert video files to .m4a audio format for passive listening. Useful for extracting audio from lectures, tutorials, and other educational content.
+Batch-convert a folder of video (or audio files) to .m4a audio format for passive listening. Useful for extracting audio from lectures, tutorials, and other educational content. Optionally normalize audio or trim non-spoken portions.
 
-## Usage
+## Quick Start
 Download the exe from the [releases]([url](https://github.com/SagaSkoyere/Bulk-Passive-Listening/releases)), and simply run! You'll be prompted for the directory of your video files, asked whether you want to normalize audio (make loud parts quieter/soft parts louder), and whether you want to remove non-spoken portions from the video*.
 
-* In my testing, "compressing" the audio from a show or anime episode typically removes somewhere from 15-35% of the clip's runtime.
+*In my testing, "compressing" the audio from a show or anime episode typically removes somewhere from 15-35% of the clip's runtime.
 
 ## Features
 
