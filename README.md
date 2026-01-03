@@ -2,6 +2,11 @@
 
 Batch-convert video files to .m4a audio format for passive listening. Useful for extracting audio from lectures, tutorials, and other educational content.
 
+## Usage
+Download the exe from the [releases]([url](https://github.com/SagaSkoyere/Bulk-Passive-Listening/releases)), and simply run! You'll be prompted for the directory of your video files, asked whether you want to normalize audio (make loud parts quieter/soft parts louder), and whether you want to remove non-spoken portions from the video*.
+
+* In my testing, "compressing" the audio from a show or anime episode typically removes somewhere from 15-35% of the clip's runtime.
+
 ## Features
 
 - **Batch Processing**: Convert all videos in a directory at once
@@ -11,82 +16,6 @@ Batch-convert video files to .m4a audio format for passive listening. Useful for
   - Audio normalization to -16 LUFS for consistent volume
   - Multi-track audio selection
 - **Standalone**: Pre-bundled executable with all dependencies (no installation required)
-
-## Quick Start
-
-### For End Users
-
-1. Download the latest executable from releases
-2. Run from command line or provide directory as argument:
-   ```
-   video-to-audio.exe
-   video-to-audio.exe "C:\path\to\videos"
-   ```
-3. Configure processing options:
-   - Silence removal (FFmpeg or ML-based speech detection)
-   - Audio normalization
-   - Audio track selection
-4. Output files (.m4a) are saved alongside source videos with `_audio` suffix
-
-### Usage Example
-
-```
-============================================================
-                Video to Audio Converter
-============================================================
-
-Enter directory path: C:\Users\YourName\Videos
-Directory: C:\Users\YourName\Videos
-
-Configuration Options:
---------------------------------------------------
-Remove stretches of silence? (y/n): y
-  Use experimental machine learning for speech detection? (y/n): y
-Normalize audio levels for listening? (y/n): y
-Audio track to use (1/2/3): 1
-
-Searching for video files...
-
-Found 5 video file(s)
-
-============================================================
-Processing Files
-============================================================
-
-[1/5] Converting: lecture.mp4
-      Output: lecture_audio.m4a
-      Status: ✓ Completed
-
-[2/5] Converting: tutorial.mov
-      Output: tutorial_audio.m4a
-      Status: ✓ Completed
-
-...
-
-============================================================
-                        SUMMARY
-============================================================
-Total files:  5
-Successful:   5
-Failed:       0
-
-All files converted successfully!
-```
-
-## Command-Line Usage
-
-You can also provide the directory path as an argument:
-
-```cmd
-video-to-audio.exe "C:\Users\YourName\Videos"
-```
-
-## Output
-
-- **Format**: AAC audio, .m4a container, 160kbps
-- **Location**: Same folder as source videos
-- **Naming**: `video.mp4` → `video_audio.m4a`
-- Existing files are overwritten
 
 ## Processing Options
 
@@ -144,7 +73,3 @@ See BUILD_INSTRUCTIONS.md for details.
 - Only processes files in specified directory (not subdirectories)
 - Overwrites existing .m4a files
 - Silence removal may cut intentionally quiet audio
-
-## License
-
-MIT License
